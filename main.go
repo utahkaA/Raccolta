@@ -13,38 +13,34 @@ import (
   "github.com/utahkaA/Raccolta/utils"
 )
 
-// type Config struct {
-//   Service     string  `json:"service"`
-//   ReadToken   string  `json:"read_token"`
-// }
+const (
+  pathToServiceConfig = ".config.json"
+  pathToDatabaseConfig = ".database.json"
+)
 
 func main() {
-  serviceConfigs := utils.NewServiceConfigs(".config.json")
+  serviceConfigs := utils.NewServiceConfigs(pathToServiceConfig)
 
-  api := "tags/python/items"
-  qiitaIF, err := sources.NewQiitaInterface(api, serviceConfigs)
+  qiitaIF, err := sources.NewQiitaInterface(serviceConfigs)
   if err != nil {
     log.Fatal(err)
   }
   articles := qiitaIF.Get()
 
-  databaseConfig := utils.NewDatabaseConfig(".database.json")
+  databaseConfig := utils.NewDatabaseConfig(pathToDatabaseConfig)
   var db *gorm.DB
   if databaseConfig.Dialect == "postgres" {
     info := fmt.Sprintf("user=%s dbname=%s sslmode=disable password=%s",
                         databaseConfig.User,
                         databaseConfig.Database,
                         databaseConfig.Password)
+    // Connect to a PostgreSQL server.
     db, err = gorm.Open(databaseConfig.Dialect, info)
     if err != nil {
       log.Fatal(err)
     }
   }
   defer db.Close()
-
-  // db.DropTableIfExists(&models.Article{}, &models.Tag{}, "article_tags")
-  // db.AutoMigrate(&models.Article{})
-  // db.AutoMigrate(&models.Tag{})
 
   if db.HasTable("articles") {
     for _, article := range articles {
@@ -58,15 +54,19 @@ func main() {
         log.Fatal(err)
       }
 
-      log.Printf("%s, Qiita, %s, %s, %s, %d, %s, %d\n",
+      showTags := make([]string, 0)
+      for _, t := range article.Tags {
+        showTags = append(showTags, t.Name)
+      }
+      fmt.Printf("%s,%v,%s,%d,%s\n",
         article.Title,
-        tags,
+        showTags,
         article.URL,
-        createdAt,
         article.LikesCount,
         article.User.Id,
-        article.CommentsCount,
       )
+      fmt.Println("---------------")
+
       articleRecord := models.Article{
         Title: article.Title,
         SiteName: "Qiita",
@@ -78,9 +78,6 @@ func main() {
         CommentsCount: uint(article.CommentsCount),
         IsFavorite: false,
       }
-
-      log.Println(articleRecord)
-
       db.Create(&articleRecord)
     }
   } else {

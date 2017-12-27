@@ -4,14 +4,12 @@ import (
   "encoding/json"
   "io/ioutil"
   "log"
-
-  // "github.com/jinzhu/gorm"
-  // _ "github.com/jinzhu/gorm/dialects/postgres"
 )
 
 type ServiceConfig struct {
-  Name        string  `json:"service"`
-  ReadToken   string  `json:"read_token"`
+  Name        string    `json:"service"`
+  ReadToken   string    `json:"read_token"`
+  APIs        []string  `json:"api"`
 }
 
 func NewServiceConfigs(pathToConfig string) []ServiceConfig {

@@ -15,7 +15,7 @@ type QiitaArticle struct {
   RenderedBody    string    `json:"rendered_body"`
   Body            string    `json:"body"`
   Coediting       bool      `json:"coediting"`
-  CommentsCount	  int			  `json:"comments_count"`
+  CommentsCount	  int       `json:"comments_count"`
   CreatedAt       string    `json:"created_at"`
   Group           string    `json:"group"`
   Id              string    `json:"id"`
@@ -50,24 +50,30 @@ type UserInfo struct {
 
 type QiitaInterface struct {
   apiEndPointTemp string
-  url             string
+  urls            []string
   readToken       string
 }
 
-func NewQiitaInterface(api string, config interface{}) (*QiitaInterface, error) {
+func NewQiitaInterface(config interface{}) (*QiitaInterface, error) {
   qi := &QiitaInterface{}
   qi.apiEndPointTemp = `https://qiita.com/api/v2/`
-  qi.url = fmt.Sprintf("%s%s", qi.apiEndPointTemp, api)
+  // qi.url = fmt.Sprintf("%s%s", qi.apiEndPointTemp, api)
 
   switch _config := config.(type) {
   case utils.ServiceConfig:
     if _config.Name == "Qiita" {
       qi.readToken = _config.ReadToken
+      for _, api := range _config.APIs {
+        qi.urls = append(qi.urls, fmt.Sprintf("%s%s", qi.apiEndPointTemp, api))
+      }
     }
   case []utils.ServiceConfig:
     for _, c := range _config {
       if c.Name == "Qiita" {
         qi.readToken = c.ReadToken
+        for _, api := range c.APIs {
+          qi.urls = append(qi.urls, fmt.Sprintf("%s%s", qi.apiEndPointTemp, api))
+        }
       }
     }
   default:
@@ -81,36 +87,44 @@ func (qi *QiitaInterface) SetReadToken(token string) {
   qi.readToken = token
 }
 
-func (qi *QiitaInterface) SelectAPI(api string) {
-  qi.url = fmt.Sprintf("%s%s", qi.apiEndPointTemp, api)
+func (qi *QiitaInterface) AppendAPI(api string) {
+  qi.urls = append(qi.urls, fmt.Sprintf("%s%s", qi.apiEndPointTemp, api))
 }
 
 func (qi *QiitaInterface) Get() []QiitaArticle {
-  req, err := http.NewRequest("GET", qi.url, nil)
-  if err != nil {
-    errMsg := "GET request to Qiita failed (NewRequest)\n"
-    log.Fatalf(errMsg)
-  }
-  req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", qi.readToken))
+  allQiitaArticles := make([]QiitaArticle, 0)
+  for _, url := range qi.urls {
+    // Create a new request instance.
+    req, err := http.NewRequest("GET", url, nil)
+    if err != nil {
+      errMsg := "Creating a new request to Qiita failed\n"
+      log.Fatalf(errMsg)
+    }
+    // Add an authorization header to the request.
+    req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", qi.readToken))
 
-  client := new(http.Client)
-  res, err := client.Do(req)
-  if err != nil {
-    errMsg := "GET request to Qiita failed (send request)\n"
-    log.Fatalf(errMsg)
-  }
-  defer res.Body.Close()
+    // Create a HTTP client and send a GET request.
+    client := new(http.Client)
+    res, err := client.Do(req)
+    if err != nil {
+      errMsg := "GET request to Qiita failed (send request)\n"
+      log.Fatalf(errMsg)
+    }
+    defer res.Body.Close()
 
-  articles, err := ioutil.ReadAll(res.Body)
-  if err != nil {
-    log.Fatal(err)
-  }
+    // Read a response from the Qiita API.
+    articles, err := ioutil.ReadAll(res.Body)
+    if err != nil {
+      log.Fatal(err)
+    }
 
-  var qiitaArticles []QiitaArticle
-  err = json.Unmarshal(articles, &qiitaArticles)
-  if err != nil {
-    log.Fatal(err)
+    // Parse response data as a JSON format file.
+    var qiitaArticles []QiitaArticle
+    err = json.Unmarshal(articles, &qiitaArticles)
+    if err != nil {
+      log.Fatal(err)
+    }
+    allQiitaArticles = append(allQiitaArticles, qiitaArticles...)
   }
-
-  return qiitaArticles
+  return allQiitaArticles
 }
