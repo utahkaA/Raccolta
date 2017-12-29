@@ -2,8 +2,11 @@ package utils
 
 import (
   "encoding/json"
+  "fmt"
   "io/ioutil"
-  "log"
+  "reflect"
+
+  "github.com/spf13/viper"
 )
 
 type ServiceConfig struct {
@@ -12,19 +15,37 @@ type ServiceConfig struct {
   APIs        []string  `json:"api"`
 }
 
-func NewServiceConfigs(pathToConfig string) []ServiceConfig {
-  configContent, err := ioutil.ReadFile(pathToConfig)
-  if err != nil {
-    log.Fatal(err)
+func NewServiceConfig(direction interface{}) (ServiceConfig, error) {
+  var config ServiceConfig
+
+  switch _direction := direction.(type) {
+  case *viper.Viper:
+    config.Name = _direction.Get("service").(string)
+    config.ReadToken = _direction.Get("read_token").(string)
+
+    apis := make([]string, len(_direction.Get("api").([]interface{})))
+    for i, api := range _direction.Get("api").([]interface{}) {
+      switch api.(type) {
+      case string:
+        apis[i] = api.(string)
+      }
+    }
+    config.APIs = apis
+  case string:
+    configContent, err := ioutil.ReadFile(_direction)
+    if err != nil {
+      panic(fmt.Errorf("[Error] %s : Read file faild", err))
+    }
+
+    err = json.Unmarshal(configContent, &config)
+    if err != nil {
+      panic(fmt.Errorf("[Error] %s : Unmarshal faild", err))
+    }
+  default:
+    return config, fmt.Errorf("Type Error: %s is not supported", reflect.TypeOf(_direction))
   }
 
-  var configs []ServiceConfig
-  err = json.Unmarshal(configContent, &configs)
-  if err != nil {
-    log.Fatal(err)
-  }
-
-  return configs
+  return config, nil
 }
 
 type DatabaseConfig struct {
@@ -34,17 +55,28 @@ type DatabaseConfig struct {
   Password  string  `json:"password"`
 }
 
-func NewDatabaseConfig(pathToConfig string) DatabaseConfig {
-  configContent, err := ioutil.ReadFile(pathToConfig)
-  if err != nil {
-    log.Fatal(err)
-  }
-
+func NewDatabaseConfig(direction interface{}) (DatabaseConfig, error) {
   var config DatabaseConfig
-  err = json.Unmarshal(configContent, &config)
-  if err != nil {
-    log.Fatal(err)
+
+  switch _direction := direction.(type) {
+  case *viper.Viper:
+    config.Dialect = _direction.Get("dialect").(string)
+    config.Database = _direction.Get("database").(string)
+    config.User = _direction.Get("user").(string)
+    config.Password = _direction.Get("password").(string)
+  case string:
+    configContent, err := ioutil.ReadFile(_direction)
+    if err != nil {
+      panic(fmt.Errorf("[Error] %s : Read file faild", err))
+    }
+
+    err = json.Unmarshal(configContent, &config)
+    if err != nil {
+      panic(fmt.Errorf("[Error] %s : Unmarshal faild", err))
+    }
+  default:
+    return config, fmt.Errorf("Type Error: %s is not supported", reflect.TypeOf(_direction))
   }
 
-  return config
+  return config, nil
 }
