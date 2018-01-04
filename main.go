@@ -10,6 +10,7 @@ import (
   "time"
   "net/http"
   "net/url"
+  "strings"
 
   "github.com/jinzhu/gorm"
   _ "github.com/jinzhu/gorm/dialects/postgres"
@@ -124,7 +125,6 @@ func StoreInSlack(articleCh <-chan models.Article, configPath string) {
 
   for {
     article := <-articleCh
-    fmt.Println(article)
 
     showTags := "タグ : "
     for _, tag := range article.Tags {
@@ -157,7 +157,9 @@ func StoreInSlack(articleCh <-chan models.Article, configPath string) {
   }
 }
 
-func CleanSlackChannel(configPath string) {
+func CleanSlackChannel(dbCh <-chan *gorm.DB, interval int, configPath string) {
+  db := <-dbCh
+
   // load slack config using viper
   v := viper.New()
   v.SetConfigName("slack")
@@ -166,14 +168,56 @@ func CleanSlackChannel(configPath string) {
     panic(fmt.Errorf("[Error] %s : Fatal error config file.\n", err))
   }
 
-  slackHist := getSlackHistory(v)
+  chatDeleteApi := v.GetString("api.delete")
 
-  for _, slackMsg := range slackHist.Messages {
-    if len(slackMsg.Reactions) > 0 {
-      fmt.Println(slackMsg.Text)
-      fmt.Println(slackMsg.Reactions)
-      fmt.Println(slackMsg.Timestamp)
+  for {
+    slackHist := getSlackHistory(v)
+    r := strings.NewReplacer("<", "", ">", "")
+    for _, slackMsg := range slackHist.Messages {
+      if len(slackMsg.Reactions) == 1 {
+        label := slackMsg.Reactions[0].Name
+
+        getQuery := url.Values{}
+        getQuery.Set("token", v.GetString("token"))
+        getQuery.Add("channel", v.GetString("channel_id"))
+        getQuery.Add("ts", slackMsg.Timestamp)
+        endpoint := fmt.Sprintf("%s?%s", chatDeleteApi, bytes.NewBufferString(getQuery.Encode()))
+
+        msg := strings.Split(slackMsg.Text, "\n")
+        title := msg[0]
+        url := msg[1]
+        url = r.Replace(url)
+
+        if label == "heart" {
+          // annotation
+          articleRecord := models.Article{}
+          db.First(&articleRecord, "url=?", url)
+          newArticleRecord := articleRecord
+          newArticleRecord.IsFavorite = true
+
+          db.Model(&articleRecord).Update(newArticleRecord)
+
+          // delete slack message
+          resp, err := http.Get(endpoint)
+          if err != nil {
+            panic(fmt.Errorf("HTTP request faild"))
+          }
+          defer resp.Body.Close()
+
+          fmt.Printf("%s [heart]\n", title)
+        } else if label == "weary" {
+          // delete slack message
+          resp, err := http.Get(endpoint)
+          if err != nil {
+            panic(fmt.Errorf("HTTP request faild"))
+          }
+          defer resp.Body.Close()
+
+          fmt.Printf("%s [weary]\n", title)
+        }
+      }
     }
+    time.Sleep(time.Duration(interval) * time.Second)
   }
 }
 
@@ -214,8 +258,6 @@ func getSlackHistory(v *viper.Viper) *sources.SlackHistory {
     panic(fmt.Errorf("%s\n", err))
   }
 
-  fmt.Println(slackHist)
-
   return &slackHist
 }
 
@@ -237,16 +279,18 @@ func main() {
   defer db.Close()
 
   // make a channels
-  dbCh := make(chan *gorm.DB)
+  dbInsertCh := make(chan *gorm.DB)
+  dbUpdateCh := make(chan *gorm.DB)
   articleCh := make(chan models.Article, 256)
 
   // begin collecting qiita articles goroutine.
-  go CollectQiitaArticles(dbCh, articleCh, 1800, configPath)
+  go CollectQiitaArticles(dbInsertCh, articleCh, 1800, configPath)
   go StoreInSlack(articleCh, configPath)
+  go CleanSlackChannel(dbUpdateCh, 900, configPath)
 
-  dbCh <- db
+  dbInsertCh <- db
+  dbUpdateCh <- db
 
-  // CleanSlackChannel(configPath)
   for {
     log.Printf("Raccolta is runnning...")
     time.Sleep(1800 * time.Second)
