@@ -2,11 +2,14 @@ package main
 
 import (
   "bytes"
+  "encoding/json"
   "fmt"
+  "io/ioutil"
   "os"
   "log"
   "time"
   "net/http"
+  "net/url"
 
   "github.com/jinzhu/gorm"
   _ "github.com/jinzhu/gorm/dialects/postgres"
@@ -18,114 +21,116 @@ import (
   "github.com/utahkaA/Raccolta/utils"
 )
 
-const (
-  qiitaConfig = "qiita"
-  slackConfig = "slack"
-  databaseConfig = "database"
-)
+func ConfigPath() string {
+  raccoltaHome := "%s/.raccolta"
+  return fmt.Sprintf(raccoltaHome, os.Getenv("HOME"))
+}
 
-func main() {
-  configPath := fmt.Sprintf("%s/.raccolta", os.Getenv("HOME"))
-  if _, err := os.Stat(configPath); err != nil {
-    if err = os.Mkdir(configPath, 0777); err != nil {
-      fmt.Errorf("[Error] %s : Since Raccolta configuration directory did not exist, operation faild, please try again.\n", err)
-    }
+func ConnectDB(configPath string) (*gorm.DB, error) {
+  var (
+    db *gorm.DB
+    err error
+  )
+
+  // Read database configuration file.
+  v := viper.New()
+  v.SetConfigName("database")
+  v.AddConfigPath(configPath)
+  if err = v.ReadInConfig(); err != nil {
+    return nil, err
   }
 
-  // Read Database Config
-  viper.SetConfigName(databaseConfig)
-  viper.AddConfigPath(configPath)
-  if err := viper.ReadInConfig(); err != nil {
-    panic(fmt.Errorf("[Error] %s : Fatal error config file.\n", err))
-  }
-
-  // databaseConfig := utils.NewDatabaseConfig(pathToDatabaseConfig)
-  var db *gorm.DB
-  if viper.Get("dialect") == "postgres" {
+  if v.Get("dialect") == "postgres" {
     info := fmt.Sprintf("user=%s dbname=%s sslmode=disable password=%s",
-                        viper.Get("user"),
-                        viper.Get("database"),
-                        viper.Get("password"))
+                        v.Get("user"),
+                        v.Get("database"),
+                        v.Get("password"))
     // Connect to a PostgreSQL server.
-    var err error
-    if db, err = gorm.Open(viper.Get("dialect").(string), info); err != nil {
-      log.Fatal(err)
+    if db, err = gorm.Open(v.GetString("dialect"), info); err != nil {
+      return db, err
     }
   }
-  defer db.Close()
 
-  // Read Qiita Config
-  viper.SetConfigName(qiitaConfig)
-  if err := viper.ReadInConfig(); err != nil {
+  return db, nil
+}
+
+func CollectQiitaArticles(dbCh <-chan *gorm.DB, articleCh chan<- models.Article,
+                          interval int, configPath string) {
+  // load qiita config using viper
+  v := viper.New()
+  v.SetConfigName("qiita")
+  v.AddConfigPath(configPath)
+  if err := v.ReadInConfig(); err != nil {
     panic(fmt.Errorf("[Error] %s : Fatal error config file.\n", err))
   }
-  qiitaConfig, err := utils.NewServiceConfig(viper.GetViper())
-  qiitaIF, err := sources.NewQiitaInterface(qiitaConfig)
+  qiitaConfig, err := utils.NewServiceConfig(v)
   if err != nil {
-    log.Fatal(err)
+    panic(fmt.Errorf("[Error] %s : Making a instance of ServiceConfig faild."))
   }
 
-  // Get Qiita Articles
-  articles := qiitaIF.Get()
+  // make a qiita interface instance
+  qiitaInterface, err := sources.NewQiitaInterface(qiitaConfig)
+  if err != nil {
+    panic(fmt.Errorf("[Error] %s : Making a instance of QiitaInterface faild.\n"))
+  }
 
-  newArticles := make([]models.Article, 0)
-  if db.HasTable("articles") {
-    for _, article := range articles {
-      var tags []models.Tag
-      for _, t := range article.Tags {
-        tags = append(tags, models.Tag{Name: t.Name})
-      }
+  db := <-dbCh
 
-      createdAt, err := time.Parse(time.RFC3339, article.CreatedAt)
-      if err != nil {
-        log.Fatal(err)
-      }
+  for {
+    // get qiita articles
+    articles := qiitaInterface.Get()
+    if db.HasTable("articles") {
+      for _, article := range articles {
+        // parse article's createdAt string.
+        createdAt, err := time.Parse(time.RFC3339, article.CreatedAt)
+        if err != nil {
+          panic(fmt.Errorf("[Error] Parsing a article.CreatedAt faild.\n"))
+        }
 
-      showTags := make([]string, 0)
-      for _, t := range article.Tags {
-        showTags = append(showTags, t.Name)
-      }
-      fmt.Printf("%s,%v,%s,%d,%s\n",
-        article.Title,
-        showTags,
-        article.URL,
-        article.LikesCount,
-        article.User.Id,
-      )
+        // make article's record
+        articleRecord := models.Article{
+          Title: article.Title,
+          SiteName: "Qiita",
+          Author: article.User.Id,
+          Tags: models.NewTags(article.Tags),
+          URL: article.URL,
+          PostedAt: createdAt,
+          LikeCount: uint(article.LikesCount),
+          CommentsCount: uint(article.CommentsCount),
+          IsFavorite: false,
+        }
 
-      articleRecord := models.Article{
-        Title: article.Title,
-        SiteName: "Qiita",
-        Author: article.User.Id,
-        Tags: tags,
-        URL: article.URL,
-        PostedAt: createdAt,
-        LikeCount: uint(article.LikesCount),
-        CommentsCount: uint(article.CommentsCount),
-        IsFavorite: false,
+        if dbc := db.Create(&articleRecord); dbc.Error != nil {
+          log.Printf("The article '%s' is already registered.\n\n", article.Title)
+        } else {
+          // share new articles through a article channel with different goroutine.
+          articleCh <- articleRecord
+        }
       }
-      if dbc := db.Create(&articleRecord); dbc.Error != nil {
-        log.Printf("The article '%s' is already registered.\n\n", article.Title)
-      } else {
-        newArticles = append(newArticles, articleRecord)
-      }
+      time.Sleep(time.Duration(interval) * time.Second)
+    } else {
+      log.Printf("Article table does not exist.")
     }
-  } else {
-    log.Printf("Article table does not exist.")
   }
+}
 
-  fmt.Println("--- Stock Articles using Slack ---")
-  // Read Slack Config
-  viper.SetConfigName(slackConfig)
-  if err := viper.ReadInConfig(); err != nil {
+func StoreInSlack(articleCh <-chan models.Article, configPath string) {
+  v := viper.New()
+  v.SetConfigName("slack")
+  v.AddConfigPath(configPath)
+  if err := v.ReadInConfig(); err != nil {
     panic(fmt.Errorf("[Error] %s : Fatal error config file.\n", err))
   }
 
-  for _, article := range newArticles {
+  for {
+    article := <-articleCh
+    fmt.Println(article)
+
     showTags := "タグ : "
     for _, tag := range article.Tags {
       showTags = fmt.Sprintf("%s %s", showTags, tag.Name)
     }
+
     msg := fmt.Sprintf("%s (by %s)\n%s\n%s\n---\n",
       article.Title,
       article.Author,
@@ -135,8 +140,8 @@ func main() {
     fmt.Printf(msg)
 
     postMsg := `{"channel":"%s","username":"%s","text":"%s"}`
-    postMsg = fmt.Sprintf(postMsg, viper.Get("channel"), viper.Get("username"), msg)
-    req, err := http.NewRequest("POST", viper.Get("url").(string), bytes.NewBuffer([]byte(postMsg)))
+    postMsg = fmt.Sprintf(postMsg, v.Get("channel"), v.Get("username"), msg)
+    req, err := http.NewRequest("POST", v.Get("url").(string), bytes.NewBuffer([]byte(postMsg)))
     if err != nil {
       log.Fatal(err)
     }
@@ -149,5 +154,101 @@ func main() {
       log.Fatal(err)
     }
     defer resp.Body.Close()
+  }
+}
+
+func CleanSlackChannel(configPath string) {
+  // load slack config using viper
+  v := viper.New()
+  v.SetConfigName("slack")
+  v.AddConfigPath(configPath)
+  if err := v.ReadInConfig(); err != nil {
+    panic(fmt.Errorf("[Error] %s : Fatal error config file.\n", err))
+  }
+
+  slackHist := getSlackHistory(v)
+
+  for _, slackMsg := range slackHist.Messages {
+    if len(slackMsg.Reactions) > 0 {
+      fmt.Println(slackMsg.Text)
+      fmt.Println(slackMsg.Reactions)
+      fmt.Println(slackMsg.Timestamp)
+    }
+  }
+}
+
+func constructEndpoint(v *viper.Viper) string {
+  chatHistoryApi := v.GetString("api.history")
+  getQuery := url.Values{}
+  getQuery.Set("token", v.GetString("token"))
+  getQuery.Add("channel", v.GetString("channel_id"))
+  endpoint := fmt.Sprintf("%s?%s", chatHistoryApi, bytes.NewBufferString(getQuery.Encode()))
+  return endpoint
+}
+
+func getSlackHistory(v *viper.Viper) *sources.SlackHistory {
+  endpoint := constructEndpoint(v)
+
+  req, err := http.NewRequest("GET", endpoint, nil)
+  if err != nil {
+    errMsg := "Creating a new request to Slack failed\n"
+    panic(fmt.Errorf(errMsg))
+  }
+
+  client := new(http.Client)
+  resp, err := client.Do(req)
+  if err != nil {
+    errMsg := "GET request to Slack failed (send request)\n"
+    panic(fmt.Errorf(errMsg))
+  }
+  defer resp.Body.Close()
+
+  var slackHist sources.SlackHistory
+  history, err := ioutil.ReadAll(resp.Body)
+  if err != nil {
+    panic(fmt.Errorf("%s\n", err))
+  }
+
+  err = json.Unmarshal(history, &slackHist)
+  if err != nil {
+    panic(fmt.Errorf("%s\n", err))
+  }
+
+  fmt.Println(slackHist)
+
+  return &slackHist
+}
+
+func main() {
+  // preparation of a config directory.
+  configPath := ConfigPath()
+  _, err := os.Stat(configPath);
+  if err != nil {
+    if err = os.Mkdir(configPath, 0777); err != nil {
+      fmt.Errorf("[Error] %s : Since Raccolta configuration directory did not exist, operation faild, please try again.\n", err)
+    }
+  }
+
+  // connecting to a db
+  db, err := ConnectDB(configPath)
+  if err != nil {
+    panic(fmt.Errorf("[Error] DB Connecting faild : %s", err))
+  }
+  defer db.Close()
+
+  // make a channels
+  dbCh := make(chan *gorm.DB)
+  articleCh := make(chan models.Article, 256)
+
+  // begin collecting qiita articles goroutine.
+  go CollectQiitaArticles(dbCh, articleCh, 1800, configPath)
+  go StoreInSlack(articleCh, configPath)
+
+  dbCh <- db
+
+  // CleanSlackChannel(configPath)
+  for {
+    log.Printf("Raccolta is runnning...")
+    time.Sleep(1800 * time.Second)
   }
 }
