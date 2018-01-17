@@ -171,49 +171,51 @@ func CleanSlackChannel(dbCh <-chan *gorm.DB, interval int, configPath string) {
   chatDeleteApi := v.GetString("api.delete")
 
   for {
-    slackHist := getSlackHistory(v)
-    r := strings.NewReplacer("<", "", ">", "")
-    for _, slackMsg := range slackHist.Messages {
-      if len(slackMsg.Reactions) == 1 {
-        label := slackMsg.Reactions[0].Name
+    slackHist, err := getSlackHistory(v)
+    if err != nil {
+      r := strings.NewReplacer("<", "", ">", "")
+      for _, slackMsg := range slackHist.Messages {
+        if len(slackMsg.Reactions) == 1 {
+          label := slackMsg.Reactions[0].Name
 
-        getQuery := url.Values{}
-        getQuery.Set("token", v.GetString("token"))
-        getQuery.Add("channel", v.GetString("channel_id"))
-        getQuery.Add("ts", slackMsg.Timestamp)
-        endpoint := fmt.Sprintf("%s?%s", chatDeleteApi, bytes.NewBufferString(getQuery.Encode()))
+          getQuery := url.Values{}
+          getQuery.Set("token", v.GetString("token"))
+          getQuery.Add("channel", v.GetString("channel_id"))
+          getQuery.Add("ts", slackMsg.Timestamp)
+          endpoint := fmt.Sprintf("%s?%s", chatDeleteApi, bytes.NewBufferString(getQuery.Encode()))
 
-        msg := strings.Split(slackMsg.Text, "\n")
-        title := msg[0]
-        url := msg[1]
-        url = r.Replace(url)
+          msg := strings.Split(slackMsg.Text, "\n")
+          title := msg[0]
+          url := msg[1]
+          url = r.Replace(url)
 
-        if label == "heart" {
-          // annotation
-          articleRecord := models.Article{}
-          db.First(&articleRecord, "url=?", url)
-          newArticleRecord := articleRecord
-          newArticleRecord.IsFavorite = true
+          if label == "heart" {
+            // annotation
+            articleRecord := models.Article{}
+            db.First(&articleRecord, "url=?", url)
+            newArticleRecord := articleRecord
+            newArticleRecord.IsFavorite = true
 
-          db.Model(&articleRecord).Update(newArticleRecord)
+            db.Model(&articleRecord).Update(newArticleRecord)
 
-          // delete slack message
-          resp, err := http.Get(endpoint)
-          if err != nil {
-            panic(fmt.Errorf("HTTP request faild"))
+            // delete slack message
+            resp, err := http.Get(endpoint)
+            if err != nil {
+              panic(fmt.Errorf("HTTP request faild"))
+            }
+            defer resp.Body.Close()
+
+            fmt.Printf("%s [heart]\n", title)
+          } else if label == "weary" {
+            // delete slack message
+            resp, err := http.Get(endpoint)
+            if err != nil {
+              panic(fmt.Errorf("HTTP request faild"))
+            }
+            defer resp.Body.Close()
+
+            fmt.Printf("%s [weary]\n", title)
           }
-          defer resp.Body.Close()
-
-          fmt.Printf("%s [heart]\n", title)
-        } else if label == "weary" {
-          // delete slack message
-          resp, err := http.Get(endpoint)
-          if err != nil {
-            panic(fmt.Errorf("HTTP request faild"))
-          }
-          defer resp.Body.Close()
-
-          fmt.Printf("%s [weary]\n", title)
         }
       }
     }
@@ -230,35 +232,35 @@ func constructEndpoint(v *viper.Viper) string {
   return endpoint
 }
 
-func getSlackHistory(v *viper.Viper) *sources.SlackHistory {
+func getSlackHistory(v *viper.Viper) (*sources.SlackHistory, error) {
   endpoint := constructEndpoint(v)
 
   req, err := http.NewRequest("GET", endpoint, nil)
   if err != nil {
-    errMsg := "Creating a new request to Slack failed\n"
-    panic(fmt.Errorf(errMsg))
+    errMsg := "[Error] Creating a new request to Slack failed\n"
+    return nil, fmt.Errorf(errMsg)
   }
 
   client := new(http.Client)
   resp, err := client.Do(req)
   if err != nil {
-    errMsg := "GET request to Slack failed (send request)\n"
-    panic(fmt.Errorf(errMsg))
+    errMsg := "[Error] GET request to Slack failed (send request)\n"
+    return nil, fmt.Errorf(errMsg)
   }
   defer resp.Body.Close()
 
   var slackHist sources.SlackHistory
   history, err := ioutil.ReadAll(resp.Body)
   if err != nil {
-    panic(fmt.Errorf("%s\n", err))
+    return nil, fmt.Errorf("[Error] A ploblem occurred while reading a body of the response.: %s\n", err)
   }
 
   err = json.Unmarshal(history, &slackHist)
   if err != nil {
-    panic(fmt.Errorf("%s\n", err))
+    return nil, fmt.Errorf("[Error] A problem occurred while parsing data as JSON file.: %s\n", err)
   }
 
-  return &slackHist
+  return &slackHist, nil
 }
 
 func main() {
