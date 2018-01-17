@@ -55,7 +55,7 @@ type QiitaInterface struct {
 }
 
 func NewQiitaInterface(config interface{}) (*QiitaInterface, error) {
-  qi := &QiitaInterface{}
+  qi := new(QiitaInterface)
   qi.apiEndPointTemp = `https://qiita.com/api/v2/`
   // qi.url = fmt.Sprintf("%s%s", qi.apiEndPointTemp, api)
 

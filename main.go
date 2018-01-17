@@ -22,10 +22,10 @@ import (
   "github.com/utahkaA/Raccolta/utils"
 )
 
-func ConfigPath() string {
-  raccoltaHome := "%s/.raccolta"
-  return fmt.Sprintf(raccoltaHome, os.Getenv("HOME"))
-}
+// func ConfigPath() string {
+//   raccoltaHome := "%s/.raccolta"
+//   return fmt.Sprintf(raccoltaHome, os.Getenv("HOME"))
+// }
 
 func ConnectDB(configPath string) (*gorm.DB, error) {
   var (
@@ -171,7 +171,7 @@ func CleanSlackChannel(dbCh <-chan *gorm.DB, interval int, configPath string) {
   chatDeleteApi := v.GetString("api.delete")
 
   for {
-    slackHist, err := getSlackHistory(v)
+    slackHist, err := sources.GetSlackHistory(v)
     if err != nil {
       r := strings.NewReplacer("<", "", ">", "")
       for _, slackMsg := range slackHist.Messages {
@@ -223,45 +223,45 @@ func CleanSlackChannel(dbCh <-chan *gorm.DB, interval int, configPath string) {
   }
 }
 
-func constructEndpoint(v *viper.Viper) string {
-  chatHistoryApi := v.GetString("api.history")
-  getQuery := url.Values{}
-  getQuery.Set("token", v.GetString("token"))
-  getQuery.Add("channel", v.GetString("channel_id"))
-  endpoint := fmt.Sprintf("%s?%s", chatHistoryApi, bytes.NewBufferString(getQuery.Encode()))
-  return endpoint
-}
+// func constructEndpoint(v *viper.Viper) string {
+//   chatHistoryApi := v.GetString("api.history")
+//   getQuery := url.Values{}
+//   getQuery.Set("token", v.GetString("token"))
+//   getQuery.Add("channel", v.GetString("channel_id"))
+//   endpoint := fmt.Sprintf("%s?%s", chatHistoryApi, bytes.NewBufferString(getQuery.Encode()))
+//   return endpoint
+// }
 
-func getSlackHistory(v *viper.Viper) (*sources.SlackHistory, error) {
-  endpoint := constructEndpoint(v)
-
-  req, err := http.NewRequest("GET", endpoint, nil)
-  if err != nil {
-    errMsg := "[Error] Creating a new request to Slack failed\n"
-    return nil, fmt.Errorf(errMsg)
-  }
-
-  client := new(http.Client)
-  resp, err := client.Do(req)
-  if err != nil {
-    errMsg := "[Error] GET request to Slack failed (send request)\n"
-    return nil, fmt.Errorf(errMsg)
-  }
-  defer resp.Body.Close()
-
-  var slackHist sources.SlackHistory
-  history, err := ioutil.ReadAll(resp.Body)
-  if err != nil {
-    return nil, fmt.Errorf("[Error] A ploblem occurred while reading a body of the response.: %s\n", err)
-  }
-
-  err = json.Unmarshal(history, &slackHist)
-  if err != nil {
-    return nil, fmt.Errorf("[Error] A problem occurred while parsing data as JSON file.: %s\n", err)
-  }
-
-  return &slackHist, nil
-}
+// func getSlackHistory(v *viper.Viper) (*sources.SlackHistory, error) {
+//   endpoint := constructEndpoint(v)
+//
+//   req, err := http.NewRequest("GET", endpoint, nil)
+//   if err != nil {
+//     errMsg := "[Error] Creating a new request to Slack failed\n"
+//     return nil, fmt.Errorf(errMsg)
+//   }
+//
+//   client := new(http.Client)
+//   resp, err := client.Do(req)
+//   if err != nil {
+//     errMsg := "[Error] GET request to Slack failed (send request)\n"
+//     return nil, fmt.Errorf(errMsg)
+//   }
+//   defer resp.Body.Close()
+//
+//   var slackHist sources.SlackHistory
+//   history, err := ioutil.ReadAll(resp.Body)
+//   if err != nil {
+//     return nil, fmt.Errorf("[Error] A ploblem occurred while reading a body of the response.: %s\n", err)
+//   }
+//
+//   err = json.Unmarshal(history, &slackHist)
+//   if err != nil {
+//     return nil, fmt.Errorf("[Error] A problem occurred while parsing data as JSON file.: %s\n", err)
+//   }
+//
+//   return &slackHist, nil
+// }
 
 func main() {
   // preparation of a config directory.

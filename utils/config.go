@@ -2,12 +2,18 @@ package utils
 
 import (
   "encoding/json"
+  "os"
   "fmt"
   "io/ioutil"
   "reflect"
 
   "github.com/spf13/viper"
 )
+
+func RaccoltaHome() string {
+  raccoltaHome := "%s/.raccolta"
+  return fmt.Sprintf(raccoltaHome, os.Getenv("HOME"))
+}
 
 type ServiceConfig struct {
   Name        string    `json:"service"`
